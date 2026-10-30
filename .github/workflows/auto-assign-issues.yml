@@ -1,0 +1,74 @@
+name: Auto-assign new issues
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  assign:
+    name: Assign and leave a note
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign to the org owner, then comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.issue.number;
+            const preferred = "LofiSu";
+
+            async function tryAssign(login) {
+              try {
+                const { data } = await github.rest.issues.addAssignees({
+                  owner,
+                  repo,
+                  issue_number,
+                  assignees: [login],
+                });
+                const ok = (data.assignees || []).some(
+                  (assignee) => assignee.login.toLowerCase() === login.toLowerCase()
+                );
+                if (!ok) {
+                  core.warning(`GitHub did not assign ${login}.`);
+                }
+                return ok;
+              } catch (error) {
+                core.warning(`Could not assign ${login}: ${error.message}`);
+                return false;
+              }
+            }
+
+            let assigned = await tryAssign(preferred);
+            if (!assigned) {
+              try {
+                const { data } = await github.rest.issues.listAssignees({
+                  owner,
+                  repo,
+                  per_page: 100,
+                });
+                const fallback =
+                  data.find((user) => user.login !== preferred) || data[0];
+                if (fallback) {
+                  assigned = await tryAssign(fallback.login);
+                } else {
+                  core.warning("No eligible assignees are available.");
+                }
+              } catch (error) {
+                core.warning(`Could not list assignees: ${error.message}`);
+              }
+            }
+
+            const body = assigned
+              ? "Automatically assigned for triage. A LoomLab maintainer will follow up."
+              : "Could not auto-assign this issue because no eligible assignee was available. A LoomLab maintainer will follow up.";
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
